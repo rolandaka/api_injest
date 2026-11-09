@@ -163,4 +163,14 @@ def load_data(df: pd.DataFrame, database_url: str):
     print(f"Staging {len(df)} rows into temporary table '{temp_table}'...")
     df.to_sql(name=temp_table, con=engine, if_exists='replace', index=False)
 
+    upsert_query = f"""
+        INSERT INTO "{prod_table}" (
+            date, max_temp, min_temp, weather_code, sunrise, sunset, logged_at
+        )
+        SELECT 
+            date, max_temp, min_temp, weather_code, sunrise, sunset, logged_at
+        FROM {temp_table}
+        ON CONFLICT (weather_code) DO NOTHING;
+    """
+
 
