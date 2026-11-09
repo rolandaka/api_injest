@@ -181,3 +181,29 @@ def load_data(df: pd.DataFrame, database_url: str):
     with engine.begin() as conn:
         conn.execute(text(f"DROP TABLE IF EXISTS {temp_table};"))
         print(f"Dropped temporary table '{temp_table}'.")
+
+
+# =====================================================================
+# EXECUTION BLOCK
+# =====================================================================
+if __name__ == "__main__":
+
+    db_user = os.getenv("DB_USER")
+    db_pass = os.getenv("DB_PASSWORD")
+    db_host = os.getenv("DB_HOST")
+    db_port = os.getenv("DB_PORT")
+    db_name = os.getenv("DB_NAME")
+
+    DATABASE_URL = "postgresql://db_user:db_pass@db_host:db_port/db_name"
+
+    try:
+        # Step A: Get the live data source
+        weather_df = fetch_weather_data()
+        print("Successfully generated source DataFrame:")
+        print(weather_df.head())
+
+        # Step B: Load it to PostgreSQL
+        load_data(weather_df, DATABASE_URL)
+
+    except Exception as e:
+        print(f"Pipeline failed: {e}")
