@@ -6,6 +6,9 @@ from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
 import os
 
+# Load environment variables from .env file
+load_dotenv()
+
 
 
 # ==========================================
@@ -126,6 +129,44 @@ def save_data(df: pd.DataFrame) -> None:
 
 
 
+# =====================================================================
+# IDEMPOTENT PIPELINE LAYER
+# =====================================================================
+def load_data(df: pd.DataFrame, database_url: str):
+    """Inserts a cleaned weather DataFrame into PostgreSQL idempotently."""
+    engine = create_engine(database_url)
+    temp_table = "temp_staged_weather"
+    prod_table = "3_day_weather_forecast"
+
+    logging.info("Staging %d rows into temporary table '%s'...", len(df), temp_table)
+    df.to_sql(name=temp_table, con=engine, if_exists='replace', index=False)
+
+    upsert_query = f"""
+        INSERT INTO "{prod_table}" (
+            date, max_temperature, min_temperature, weather_code, sunrise, sunset, loaded_at
+        )
+        SELECT
+            date, max_temperature, min_temperature, weather_code, sunrise, sunset, loaded_at
+        FROM {temp_table}
+        ON CONFLICT (date) DO UPDATE SET
+            max_temperature = EXCLUDED.max_temperature,
+            min_temperature = EXCLUDED.min_temperature,
+            weather_code = EXCLUDED.weather_code,
+            sunrise = EXCLUDED.sunrise,
+            sunset = EXCLUDED.sunset,
+            loaded_at = EXCLUDED.loaded_at;
+    """
+
+    with engine.begin() as conn:
+        conn.execute(text(upsert_query))
+        logging.info("Upserted data into '%s' successfully.", prod_table)
+
+    # Clean up temporary table
+    with engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {temp_table};"))
+        logging.info("Dropped temporary table '%s'.", temp_table)
+
+
 # ==========================================
 # MAIN EXECUTION CONTROLLER
 # ==========================================
@@ -133,9 +174,30 @@ def main():
     logging.info("=== Pipeline Execution Started ===")
 
     try:
+        # Step 1: Fetch raw data from API
         raw_data = fetch_data(API_URL)
+
+        # Step 2: Clean and transform data
         cleaned_df = clean_data(raw_data)
+
+        # Step 3: Save to local CSV
         save_data(cleaned_df)
+
+        # Step 4: Load to PostgreSQL database
+        db_user = os.getenv("DB_USER")
+        db_pass = os.getenv("DB_PASSWORD")
+        db_host = os.getenv("DB_HOST")
+        db_port = os.getenv("DB_PORT", "5432")
+        db_name = os.getenv("DB_NAME")
+
+        if all([db_user, db_pass, db_host, db_name]):
+            database_url = f"postgresql://{db_user}:{db_pass}@{db_host}:{db_port}/{db_name}"
+            load_data(cleaned_df, database_url)
+        else:
+            logging.warning(
+                "Database environment variables not set. Skipping database load. "
+                "Set DB_USER, DB_PASSWORD, DB_HOST, and DB_NAME in your .env file."
+            )
 
         logging.info("=== Pipeline Finished Execution (Success) ===")
 
@@ -149,61 +211,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-# =====================================================================
-# IDEMPOTENT PIPELINE LAYER
-# =====================================================================
-def load_data(df: pd.DataFrame, database_url: str):
-    """Inserts a cleaned weather DataFrame into PostgreSQL idempotently."""
-    engine = create_engine(database_url)
-    temp_table = "temp_staged_weather"
-    prod_table = "3_day_weather_forecast"
-
-    print(f"Staging {len(df)} rows into temporary table '{temp_table}'...")
-    df.to_sql(name=temp_table, con=engine, if_exists='replace', index=False)
-
-    upsert_query = f"""
-        INSERT INTO "{prod_table}" (
-            date, max_temp, min_temp, weather_code, sunrise, sunset, logged_at
-        )
-        SELECT 
-            date, max_temp, min_temp, weather_code, sunrise, sunset, logged_at
-        FROM {temp_table}
-        ON CONFLICT (weather_code) DO NOTHING;
-    """
-
-    with engine.begin() as conn:
-        conn.execute(text(upsert_query))
-        print(f"Upserted data into '{prod_table}' successfully.")
-
-    # Clean up temporary table
-    with engine.begin() as conn:
-        conn.execute(text(f"DROP TABLE IF EXISTS {temp_table};"))
-        print(f"Dropped temporary table '{temp_table}'.")
-
-
-# =====================================================================
-# EXECUTION BLOCK
-# =====================================================================
-if __name__ == "__main__":
-
-    db_user = os.getenv("DB_USER")
-    db_pass = os.getenv("DB_PASSWORD")
-    db_host = os.getenv("DB_HOST")
-    db_port = os.getenv("DB_PORT")
-    db_name = os.getenv("DB_NAME")
-
-    DATABASE_URL = "postgresql://db_user:db_pass@db_host:db_port/db_name"
-
-    try:
-        # Step A: Get the live data source
-        weather_df = fetch_weather_data()
-        print("Successfully generated source DataFrame:")
-        print(weather_df.head())
-
-        # Step B: Load it to PostgreSQL
-        load_data(weather_df, DATABASE_URL)
-
-    except Exception as e:
-        print(f"Pipeline failed: {e}")
