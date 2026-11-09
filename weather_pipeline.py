@@ -173,4 +173,11 @@ def load_data(df: pd.DataFrame, database_url: str):
         ON CONFLICT (weather_code) DO NOTHING;
     """
 
+    with engine.begin() as conn:
+        conn.execute(text(upsert_query))
+        print(f"Upserted data into '{prod_table}' successfully.")
 
+    # Clean up temporary table
+    with engine.begin() as conn:
+        conn.execute(text(f"DROP TABLE IF EXISTS {temp_table};"))
+        print(f"Dropped temporary table '{temp_table}'.")
